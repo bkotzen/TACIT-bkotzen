@@ -314,399 +314,401 @@ threshold_function <- function(k, data_anb, clusters) {
 
 TACIT <- function(data_expression, r, p, Signature) {
   
-  data_anb=data_expression[,colnames(Signature)[-1]]
-  
-  ### Processing data
-  #----
-  ## Signature data (St)
-  Signature[is.na(Signature) == T] <- 0 ## assign all NA as 0
-  Signature <- as.data.frame(Signature)
-  
-  # Intensity data (A_ij)
-  
-  main_cell_types_with_markers <- find_main_cell_types_with_subsets_and_markers(Signature)
-  ct_main <- names(main_cell_types_with_markers)
-  marker_subset <- unique(unlist(main_cell_types_with_markers))
-  
-  
-  
-  orig_values <- as.matrix(data_anb)
-  rownames(orig_values) <- 1:nrow(data_anb)
-  orig_values <- t(orig_values)
-  orig_values_metadata <- data.frame("CellID" = 1:nrow(data_anb))
-  row.names(orig_values_metadata) <- orig_values_metadata$CellID
-  scfp <- CreateSeuratObject(counts = orig_values, meta.data = orig_values_metadata)
-  
-  
-  ### Create Seurat object
-  #----
-  print("-------------------REACHED HERE: NormalizeData---------------")
-  # Set up parallel processing
-  plan(sequential)
-  scfp <- NormalizeData(scfp, normalization.method = "CLR", margin = 2) # do not normalize data
-  print("-------------------REACHED HERE: FindVariableFeatures---------------")
-  scfp <- FindVariableFeatures(scfp, selection.method = "disp", nfeatures = 500)
-  print("-------------------REACHED HERE: ScaleData---------------")
-  plan(multisession, workers = parallelly::availableCores() - 1)
-  scfp <- ScaleData(scfp, features = rownames(scfp))
-  
-  
-  
-  
-  
-  #### Clustering
-  #----
-  print("-------------------REACHED HERE: RunPCA---------------")
-  scfp <- RunPCA(scfp, features = VariableFeatures(object = scfp))
-  print("-------------------REACHED HERE: RunUMAP---------------")
-  
-  
-  ####Clustering
-  #----
-  scfp <- RunPCA(scfp, features = VariableFeatures(object = scfp))
-  print("-------------------REACHED HERE: RunUMAP---------------")
-  total_cells <- ncol(scfp)
-  #### Clustering
-  #----
-  if (total_cells < 100000) {
-    print("Less than 100000 cells, running UMAP on the entire dataset")
-    scfp <- RunUMAP(scfp,
-                    features = VariableFeatures(object = scfp), n.components = p, metric = "correlation", umap.method = "uwot",
-                    n.neighbors = 15, learning.rate = 1, spread = 1, min.dist = 0.01, set.op.mix.ratio = 1, local.connectivity = 1
-    )
-  } else {
-    print("More than 100000 cells, training UMAP using 30% of cells for training or max 100000 cells, whichever is smaller")
-    # Use 30% of cells for training or max 100000 cells, whichever is smaller
-    subset_size <- min(100000, ceiling(total_cells * 0.3))
-    # For very small datasets, use all cells
-    subset_size <- min(subset_size, total_cells)
-    
-    scfp <- FastRunUMAP(
-      seurat_obj = scfp,
-      subset_size = subset_size,
-      n.components = p,
-      n.neighbors = 15,
-      metric = "correlation",
-      min.dist = 0.01, # Same as original
-      random_seed = 1, # For reproducibility
-      verbose = TRUE
-    )
-  }
-  
-  print("-------------------REACHED HERE: FindNeighbors---------------")
-  scfp <- FindNeighbors(scfp, dims = 1:p, reduction = "umap")
-  
-  
-  
-  
-  # Run clusters
-  print("-------------------REACHED HERE: FindClusters---------------")
-  scfp <- FindClusters(scfp, resolution = r, random.seed = 1, algorithm = 4, n.iter = 2)
-  print("---------------- now here ---------------")
-  # Collected clusters ID for each cells
-  clusters <- as.numeric(scfp@meta.data[["seurat_clusters"]])
-  
-  print(paste0("Number of clusters: ", length(unique(clusters)), " with ", round(mean(as.numeric(table(clusters))), 0), " cells per clusters"))
-  
-  ### Cell type score
-  #----
-  data_anb_matrix <- as.matrix((data_anb)) # scale data intensity and convert to matrix from data frame
-  Signature_matrix <- as.matrix(Signature[, -1]) # convert signature to matrix from data frame
-  ct <- data_anb_matrix %*% t(Signature_matrix)
-  colnames(ct) <- Signature[, 1]
-  
-  
-  #  data_anb=scale(data_anb)
-  
-  ### Threshold for cell type
-  #----
-  library(parallel)
-  library(foreach)
-  library(doParallel)
-  library(caret)
-  
-  ct <- as.data.frame(ct)
-  
-  num_cores <- parallelly::availableCores() - 1 # Leave one core free for system processes
-  registerDoParallel(cores = num_cores)
-  
-  # Parallelize first loop
-  Group_threshold_data <- NULL
-  final_threshold <- NULL
-  
-  cat("==== Phase 1: Processing Main Data Columns ====\n")
-  cat("Processing", ncol(ct), "columns in parallel...\n")
-  final_threshold <- foreach(
-    k = 1:ncol(ct), .combine = c,
-    .packages = c("stats", "segmented", "dplyr"), .export = c("threshold_function", "threshold_groups")
-  ) %dopar% {
-    # Return the second element of the threshold_function result
-    vector <- threshold_function(k, ct, clusters)
-    return(vector[[2]])
-  }
-  
-  # Process Group_threshold_data in parallel
-  Group_threshold_data <- foreach(
-    k = 1:ncol(ct), .combine = cbind,
-    .packages = c("stats", "segmented", "dplyr"), .export = c("threshold_function", "threshold_groups")
-  ) %dopar% {
-    # Return the first element of the threshold_function result
-    vector <- threshold_function(k, ct, clusters)
-    return(vector[[1]])
-  }
-  
-  
-  colnames(Group_threshold_data) <- colnames(ct)
-  final_threshold <- data.frame(value = final_threshold, Name = colnames(ct)) ########### . Output 1
-  
-  # Conditionally handle marker subset processing
-  if (length(marker_subset) > 1) {
-    cat("==== Phase 2: Processing Marker Subset Data ====\n")
-    cat("Detected", length(marker_subset), "marker subsets to process\n")
-    
-    ct2 <- data_anb[, marker_subset]
-    ct2 <- as.data.frame(ct2)
-    colnames(ct2) <- marker_subset
-    
-    cat("Processing marker subset columns in parallel...\n")
-    
-    # Parallelize second loop
-    final_threshold2 <- foreach(
-      k = 1:ncol(ct2), .combine = c,
-      .packages = c("stats", "segmented", "dplyr"), .export = c("threshold_function", "threshold_groups")
-    ) %dopar% {
-      vector <- threshold_function(k, data_anb = ct2, clusters = clusters)
-      return(vector[[2]])
-    }
-    
-    Group_threshold_data2 <- foreach(
-      k = 1:ncol(ct2), .combine = cbind,
-      .packages = c("stats", "segmented", "dplyr"), .export = c("threshold_function", "threshold_groups")
-    ) %dopar% {
-      vector <- threshold_function(k, data_anb = ct2, clusters = clusters)
-      return(vector[[1]])
-    }
-    
-    final_threshold2 <- data.frame(value = final_threshold2, Name = marker_subset) ########### . Output 1
-    colnames(Group_threshold_data2) <- marker_subset
-    
-    cat("==== Phase 3: Processing Cell Types and Markers ====\n")
-    cat("Processing", length(ct_main), "main cell types...\n")
-    
-    # Vectorize operations where possible
-    for (p in 1:length(ct_main)) {
-      cat("  - Processing cell type", p, "of", length(ct_main), ":", ct_main[p], "\n")
-      ct_score_current <- Group_threshold_data[, ct_main[p]]
-      
-      if (length(unlist(main_cell_types_with_markers[ct_main[p]])) == 1) {
-        rSum <- (Group_threshold_data2[, unlist(main_cell_types_with_markers[ct_main[p]])])
-      } else {
-        rSum <- rowSums(Group_threshold_data2[, unlist(main_cell_types_with_markers[ct_main[p]])])
-      }
-      Group_threshold_data[, ct_main[p]] <- ifelse(rSum > 0, 0, ct_score_current)
-    }
-    
-    unique_markers_for_subsets <- find_unique_marker_for_subsets(Signature)
-    if (length(unique_markers_for_subsets) > 0) {
-      cat("\nProcessing", length(unique_markers_for_subsets), "unique markers for subsets...\n")
-      # Process unique markers more efficiently
-      for (p in 1:length(unique_markers_for_subsets)) {
-        ctype <- names(unique_markers_for_subsets[p])
-        marker_id <- unique_markers_for_subsets[ctype][[1]]
-        Group_threshold_data[, ctype] <- ifelse(Group_threshold_data2[, marker_id] == 0, 0, Group_threshold_data[, ctype])
-      }
-    }
-  }
-  
-  cat("==== Phase 4: Post-Processing and Analysis ====\n")
-  cat("Generating potential cell types...\n")
-  potential_ct <- replace_zero_with_column_names_opt(Group_threshold_data)
-  
-  cat("Creating test data...\n")
-  potential_ct_test <- replace_zero_with_column_names_opt(Group_threshold_data)
-  combined_vector <- apply(potential_ct_test, 1, function(x) paste(x[which(x != "0")], collapse = "::"))
-  
-  cat("Calculating group mixtures...\n")
-  group_mix <- rowSums(Group_threshold_data)
-  Group_threshold_data <- data.frame(ID = 1:nrow(Group_threshold_data), clusters, Group_threshold_data)
-  data_cluster <- data.frame(clusters, ct)
-  colnames(data_cluster)[-1] <- Signature$cell_type
-  
-  cat("Calculating median values per cluster...\n")
-  medians_per_cluster <- aggregate(. ~ clusters, data = data_cluster, FUN = median)
-  medians_per_cluster_filter <- medians_per_cluster[, -1]
-  
-  cat("Applying thresholds and converting to binary values...\n")
-  # Convert final_threshold to a named vector for easier lookup
-  thresholds <- setNames(final_threshold$value, final_threshold$Name)
-  # Apply thresholding to convert values to binary
-  binary_df <- medians_per_cluster_filter
-  binary_df[] <- sapply(names(medians_per_cluster_filter), function(column_name) {
-    if (column_name %in% names(thresholds)) {
-      as.integer(medians_per_cluster_filter[[column_name]] > thresholds[[column_name]])
-    } else {
-      medians_per_cluster_filter[[column_name]]
-    }
-  })
-  
-  cat("Generating potential cell type clusters...\n")
-  potential_ct_cluster <- replace_zero_with_column_names_opt(binary_df)
-  combined_vector <- apply(potential_ct_cluster, 1, function(x) paste(x[which(x != "0")], collapse = "::"))
-  
-  cat("Identifying clean and mixed clusters...\n")
-  cluster_clean <- medians_per_cluster$clusters[rowSums(binary_df) == 1]
-  cluster_mix <- medians_per_cluster$clusters[rowSums(binary_df) != 1]
-  
-  data_cluster_group <- data.frame(clusters = medians_per_cluster$clusters, combined_vector)
-  data_merge_cluster <- merge(data_cluster_group, Group_threshold_data, "clusters")
-  data_merge_cluster <- data_merge_cluster[order(data_merge_cluster$ID), ]
-  
-  
-  cat("Separating clean and mixed groups...\n")
-  data_clean_group <- data_merge_cluster[which(data_merge_cluster$clusters %in% cluster_clean), ]
-  data_mix_group <- data_merge_cluster[which(data_merge_cluster$clusters %in% cluster_mix), ]
-  
-  cat("\nCluster Summary:\n")
-  print(paste0("Number of clean MicroClusters: ", length(cluster_clean)))
-  print(paste0("Number of mixed MicroClusters: ", length(cluster_mix)))
-  cat("- Total MicroClusters:", length(cluster_clean) + length(cluster_mix), "\n\n")
-  
-  colnames(data_mix_group)[-c(1, 2, 3)] <- Signature$cell_type
-  
-  potential_ct <- replace_zero_with_column_names_opt(data_mix_group[, -c(1, 2, 3)])
-  
-  ### Identify clean and mix data
-  
-  cat("Processing cell type combinations...\n")
-  ## vector of potential cell type
-  combined_vector <- apply(potential_ct, 1, function(x) paste(x[which(x != "0")], collapse = "::"))
-  ## adding the vector combination into data
-  
-  cat("Preparing final data matrices...\n")
-  data_anb_matrix <- data_anb_matrix[, colnames(Signature)[-1]]
-  data_check <- data.frame(combined_vector, data_anb_matrix[data_mix_group$ID, ], data_mix_group[, -c(1, 2, 3)], ID = data_mix_group$ID)
-  
-  
-  colnames(data_check)[2:sum(ncol(data_anb_matrix), 1)] <- colnames(data_anb_matrix)
-  colnames(data_check)[sum(ncol(data_anb_matrix), 2):sum(ncol(data_anb_matrix), 1, length(Signature[, 1]))] <- Signature[, 1]
-  
-  ## Count the number of instances where a cell's value exceeds the corresponding threshold.
-  row_sums <- rowSums(data_check[, sum(ncol(data_anb_matrix), 2):sum(ncol(data_anb_matrix), 1, length(Signature[, 1]))])
-  
-  ## Selected clean cell types
-  data_out <- data_check[row_sums %in% c(1, 0), ]
-  data_clean <- data.frame(mem = c(data_out$combined_vector), ID = c(data_out$ID))
-  
-  ## Selected clean cell types
-  data_mixed <- data_check[!(row_sums %in% c(1, 0)), ]
-  data_mixed <- data_mixed[which(data_mixed$combined_vector %in% names(table(data_mixed$combined_vector))[as.numeric(table(data_mixed$combined_vector)) > 0]), ]
-  data_mixed <- data_mixed[order(rowSums(data_mixed[sum(ncol(data_anb_matrix), 2):sum(ncol(data_anb_matrix), 1, length(Signature[, 1]))])), ]
-  
-  
-  cat("==== Phase 5: Final Processing and KNN Analysis ====\n")
-  ######## Solving for mixed group
-  ## KNN
-  #----
-  library(parallel)
-  library(foreach)
-  library(doParallel)
-  library(caret)
-  
-  data_out_test <- data_out
-  data_clean_final <- data_clean
-  data_clean_cluster <- data.frame(mem = data_clean_group$combined_vector, ID = data_clean_group$ID)
-  data_clean_final <- rbind(data_clean_final, data_clean_cluster)
-  
-  
-  print(paste0("Number of clean cells: ", nrow(data_clean_final), " with ", length(unique(data_clean_final$mem)), " cell types"))
-  print(paste0("Number of mixed cells: ", nrow(data_mixed), " with ", length(unique(data_mixed$combined_vector)), " mixed cell types"))
-  
-  # Get unique mixed cell types
-  mix_group <- unique(data_mixed$combined_vector)
-  
-  clean_cell_types <- unique(data_clean_final$mem)
-  mixed_by_type <- split(data_mixed, data_mixed$combined_vector)
-  
-  # Get signature markers for each clean cell type
-  signature_markers <- list()
-  for (ct in clean_cell_types) {
-    signature_markers[[ct]] <- names(which(colSums(Signature[Signature[, 1] == ct, ][-1]) > 0))
-  }
-  
-  num_cores <- min(parallelly::availableCores() - 1, length(mix_group))
-  registerDoParallel(cores = num_cores)
-  
-  results <- foreach(i = 1:length(mix_group), .combine = rbind, .packages = c("caret")) %dopar% {
-    current_mix_type <- mix_group[i]
-    
-    # Get all cells with this specific mixed type
-    data_choose_second <- mixed_by_type[[current_mix_type]]
-    
-    # Get potential component cell types
-    mix_select <- strsplit(current_mix_type, "::")[[1]]
-    mix_select <- intersect(mix_select, clean_cell_types)
-    
-    if (length(mix_select) == 0) {
-      return(data.frame(ID = data_choose_second$ID, mem = "Others"))
-    }
-    
-    # Selected markers that signature for component cell type
-    anb_select <- names(which(colSums(Signature[Signature[, 1] %in% mix_select, ][-1]) > 0))
-    
-    if (length(anb_select) == 0) {
-      return(data.frame(ID = data_choose_second$ID, mem = "Others"))
-    }
-    
-    # Get the data intensity from the clean cells (all at once for these cell types)
-    data_clean_work <- data_out_test[
-      which(data_out_test$combined_vector %in% mix_select),
-      c(anb_select, "combined_vector", "ID")
-    ]
-    
-    if (nrow(data_clean_work) == 0) {
-      return(data.frame(ID = data_choose_second$ID, mem = "Others"))
-    } else {
-      # Extract relevant data columns for mixed cells
-      data_test <- data_choose_second[, c(anb_select, "ID")]
-      
-      # Add small random noise (vectorized operation)
-      train_matrix <- as.matrix(data_clean_work[, anb_select]) +
-        matrix(runif(nrow(data_clean_work) * length(anb_select), 0, 0.001),
-               nrow = nrow(data_clean_work)
-        )
-      
-      test_matrix <- as.matrix(data_test[, anb_select]) +
-        matrix(runif(nrow(data_test) * length(anb_select), 0, 0.001),
-               nrow = nrow(data_test)
-        )
-      
-      knn_model <- caret::knn3(train_matrix,
-                               as.factor(data_clean_work$combined_vector),
-                               k = min(10, nrow(data_clean_work))
-      )
-      
-      # Get predictions for all cells at once
-      predictions <- predict(knn_model, test_matrix, type = "prob")
-      
-      max_indices <- max.col(predictions, ties.method = "first")
-      predicted_types <- colnames(predictions)[max_indices]
-      
-      # Return batch results
-      return(data.frame(ID = data_test$ID, mem = predicted_types))
-    }
-  }
-  
-  # Combine results with clean cells
-  data_clean_final <- rbind(data_clean_final, results)
-  
-  # Final processing
-  data_clean_final$mem <- ifelse(data_clean_final$mem == "", "Others", data_clean_final$mem)
-  data_clean_final <- data_clean_final[order(as.numeric(data_clean_final$ID), decreasing = F), ]
-  
-  data_final=data.frame(TACIT=data_clean_final$mem,UMAP1=as.numeric(scfp@reductions[["umap"]]@cell.embeddings[,1]),
-                        UMAP2=as.numeric(scfp@reductions[["umap"]]@cell.embeddings[,2]),data_expression)
-  
-  return(data_final)
+  # print("IN BEN'S FUNCTION :D")
+  # 
+  # data_anb=data_expression[,colnames(Signature)[-1]]
+  # 
+  # ### Processing data
+  # #----
+  # ## Signature data (St)
+  # Signature[is.na(Signature) == T] <- 0 ## assign all NA as 0
+  # Signature <- as.data.frame(Signature)
+  # 
+  # # Intensity data (A_ij)
+  # 
+  # main_cell_types_with_markers <- find_main_cell_types_with_subsets_and_markers(Signature)
+  # ct_main <- names(main_cell_types_with_markers)
+  # marker_subset <- unique(unlist(main_cell_types_with_markers))
+  # 
+  # 
+  # 
+  # orig_values <- as.matrix(data_anb)
+  # rownames(orig_values) <- 1:nrow(data_anb)
+  # orig_values <- t(orig_values)
+  # orig_values_metadata <- data.frame("CellID" = 1:nrow(data_anb))
+  # row.names(orig_values_metadata) <- orig_values_metadata$CellID
+  # scfp <- CreateSeuratObject(counts = orig_values, meta.data = orig_values_metadata)
+  # 
+  # 
+  # ### Create Seurat object
+  # #----
+  # print("-------------------REACHED HERE: NormalizeData---------------")
+  # # Set up parallel processing
+  # plan(sequential)
+  # scfp <- NormalizeData(scfp, normalization.method = "CLR", margin = 2) # do not normalize data
+  # print("-------------------REACHED HERE: FindVariableFeatures---------------")
+  # scfp <- FindVariableFeatures(scfp, selection.method = "disp", nfeatures = 500)
+  # print("-------------------REACHED HERE: ScaleData---------------")
+  # plan(multisession, workers = parallelly::availableCores() - 1)
+  # scfp <- ScaleData(scfp, features = rownames(scfp))
+  # 
+  # 
+  # 
+  # 
+  # 
+  # #### Clustering
+  # #----
+  # print("-------------------REACHED HERE: RunPCA---------------")
+  # scfp <- RunPCA(scfp, features = VariableFeatures(object = scfp))
+  # print("-------------------REACHED HERE: RunUMAP---------------")
+  # 
+  # 
+  # ####Clustering
+  # #----
+  # scfp <- RunPCA(scfp, features = VariableFeatures(object = scfp))
+  # print("-------------------REACHED HERE: RunUMAP---------------")
+  # total_cells <- ncol(scfp)
+  # #### Clustering
+  # #----
+  # if (total_cells < 100000) {
+  #   print("Less than 100000 cells, running UMAP on the entire dataset")
+  #   scfp <- RunUMAP(scfp,
+  #                   features = VariableFeatures(object = scfp), n.components = p, metric = "correlation", umap.method = "uwot",
+  #                   n.neighbors = 15, learning.rate = 1, spread = 1, min.dist = 0.01, set.op.mix.ratio = 1, local.connectivity = 1
+  #   )
+  # } else {
+  #   print("More than 100000 cells, training UMAP using 30% of cells for training or max 100000 cells, whichever is smaller")
+  #   # Use 30% of cells for training or max 100000 cells, whichever is smaller
+  #   subset_size <- min(100000, ceiling(total_cells * 0.3))
+  #   # For very small datasets, use all cells
+  #   subset_size <- min(subset_size, total_cells)
+  #   
+  #   scfp <- FastRunUMAP(
+  #     seurat_obj = scfp,
+  #     subset_size = subset_size,
+  #     n.components = p,
+  #     n.neighbors = 15,
+  #     metric = "correlation",
+  #     min.dist = 0.01, # Same as original
+  #     random_seed = 1, # For reproducibility
+  #     verbose = TRUE
+  #   )
+  # }
+  # 
+  # print("-------------------REACHED HERE: FindNeighbors---------------")
+  # scfp <- FindNeighbors(scfp, dims = 1:p, reduction = "umap")
+  # 
+  # 
+  # 
+  # 
+  # # Run clusters
+  # print("-------------------REACHED HERE: FindClusters---------------")
+  # scfp <- FindClusters(scfp, resolution = r, random.seed = 1, algorithm = 4, n.iter = 2)
+  # print("---------------- now here ---------------")
+  # # Collected clusters ID for each cells
+  # clusters <- as.numeric(scfp@meta.data[["seurat_clusters"]])
+  # 
+  # print(paste0("Number of clusters: ", length(unique(clusters)), " with ", round(mean(as.numeric(table(clusters))), 0), " cells per clusters"))
+  # 
+  # ### Cell type score
+  # #----
+  # data_anb_matrix <- as.matrix((data_anb)) # scale data intensity and convert to matrix from data frame
+  # Signature_matrix <- as.matrix(Signature[, -1]) # convert signature to matrix from data frame
+  # ct <- data_anb_matrix %*% t(Signature_matrix)
+  # colnames(ct) <- Signature[, 1]
+  # 
+  # 
+  # #  data_anb=scale(data_anb)
+  # 
+  # ### Threshold for cell type
+  # #----
+  # library(parallel)
+  # library(foreach)
+  # library(doParallel)
+  # library(caret)
+  # 
+  # ct <- as.data.frame(ct)
+  # 
+  # num_cores <- parallelly::availableCores() - 1 # Leave one core free for system processes
+  # registerDoParallel(cores = num_cores)
+  # 
+  # # Parallelize first loop
+  # Group_threshold_data <- NULL
+  # final_threshold <- NULL
+  # 
+  # cat("==== Phase 1: Processing Main Data Columns ====\n")
+  # cat("Processing", ncol(ct), "columns in parallel...\n")
+  # final_threshold <- foreach(
+  #   k = 1:ncol(ct), .combine = c,
+  #   .packages = c("stats", "segmented", "dplyr"), .export = c("threshold_function", "threshold_groups")
+  # ) %dopar% {
+  #   # Return the second element of the threshold_function result
+  #   vector <- threshold_function(k, ct, clusters)
+  #   return(vector[[2]])
+  # }
+  # 
+  # # Process Group_threshold_data in parallel
+  # Group_threshold_data <- foreach(
+  #   k = 1:ncol(ct), .combine = cbind,
+  #   .packages = c("stats", "segmented", "dplyr"), .export = c("threshold_function", "threshold_groups")
+  # ) %dopar% {
+  #   # Return the first element of the threshold_function result
+  #   vector <- threshold_function(k, ct, clusters)
+  #   return(vector[[1]])
+  # }
+  # 
+  # 
+  # colnames(Group_threshold_data) <- colnames(ct)
+  # final_threshold <- data.frame(value = final_threshold, Name = colnames(ct)) ########### . Output 1
+  # 
+  # # Conditionally handle marker subset processing
+  # if (length(marker_subset) > 1) {
+  #   cat("==== Phase 2: Processing Marker Subset Data ====\n")
+  #   cat("Detected", length(marker_subset), "marker subsets to process\n")
+  #   
+  #   ct2 <- data_anb[, marker_subset]
+  #   ct2 <- as.data.frame(ct2)
+  #   colnames(ct2) <- marker_subset
+  #   
+  #   cat("Processing marker subset columns in parallel...\n")
+  #   
+  #   # Parallelize second loop
+  #   final_threshold2 <- foreach(
+  #     k = 1:ncol(ct2), .combine = c,
+  #     .packages = c("stats", "segmented", "dplyr"), .export = c("threshold_function", "threshold_groups")
+  #   ) %dopar% {
+  #     vector <- threshold_function(k, data_anb = ct2, clusters = clusters)
+  #     return(vector[[2]])
+  #   }
+  #   
+  #   Group_threshold_data2 <- foreach(
+  #     k = 1:ncol(ct2), .combine = cbind,
+  #     .packages = c("stats", "segmented", "dplyr"), .export = c("threshold_function", "threshold_groups")
+  #   ) %dopar% {
+  #     vector <- threshold_function(k, data_anb = ct2, clusters = clusters)
+  #     return(vector[[1]])
+  #   }
+  #   
+  #   final_threshold2 <- data.frame(value = final_threshold2, Name = marker_subset) ########### . Output 1
+  #   colnames(Group_threshold_data2) <- marker_subset
+  #   
+  #   cat("==== Phase 3: Processing Cell Types and Markers ====\n")
+  #   cat("Processing", length(ct_main), "main cell types...\n")
+  #   
+  #   # Vectorize operations where possible
+  #   for (p in 1:length(ct_main)) {
+  #     cat("  - Processing cell type", p, "of", length(ct_main), ":", ct_main[p], "\n")
+  #     ct_score_current <- Group_threshold_data[, ct_main[p]]
+  #     
+  #     if (length(unlist(main_cell_types_with_markers[ct_main[p]])) == 1) {
+  #       rSum <- (Group_threshold_data2[, unlist(main_cell_types_with_markers[ct_main[p]])])
+  #     } else {
+  #       rSum <- rowSums(Group_threshold_data2[, unlist(main_cell_types_with_markers[ct_main[p]])])
+  #     }
+  #     Group_threshold_data[, ct_main[p]] <- ifelse(rSum > 0, 0, ct_score_current)
+  #   }
+  #   
+  #   unique_markers_for_subsets <- find_unique_marker_for_subsets(Signature)
+  #   if (length(unique_markers_for_subsets) > 0) {
+  #     cat("\nProcessing", length(unique_markers_for_subsets), "unique markers for subsets...\n")
+  #     # Process unique markers more efficiently
+  #     for (p in 1:length(unique_markers_for_subsets)) {
+  #       ctype <- names(unique_markers_for_subsets[p])
+  #       marker_id <- unique_markers_for_subsets[ctype][[1]]
+  #       Group_threshold_data[, ctype] <- ifelse(Group_threshold_data2[, marker_id] == 0, 0, Group_threshold_data[, ctype])
+  #     }
+  #   }
+  # }
+  # 
+  # cat("==== Phase 4: Post-Processing and Analysis ====\n")
+  # cat("Generating potential cell types...\n")
+  # potential_ct <- replace_zero_with_column_names_opt(Group_threshold_data)
+  # 
+  # cat("Creating test data...\n")
+  # potential_ct_test <- replace_zero_with_column_names_opt(Group_threshold_data)
+  # combined_vector <- apply(potential_ct_test, 1, function(x) paste(x[which(x != "0")], collapse = "::"))
+  # 
+  # cat("Calculating group mixtures...\n")
+  # group_mix <- rowSums(Group_threshold_data)
+  # Group_threshold_data <- data.frame(ID = 1:nrow(Group_threshold_data), clusters, Group_threshold_data)
+  # data_cluster <- data.frame(clusters, ct)
+  # colnames(data_cluster)[-1] <- Signature$cell_type
+  # 
+  # cat("Calculating median values per cluster...\n")
+  # medians_per_cluster <- aggregate(. ~ clusters, data = data_cluster, FUN = median)
+  # medians_per_cluster_filter <- medians_per_cluster[, -1]
+  # 
+  # cat("Applying thresholds and converting to binary values...\n")
+  # # Convert final_threshold to a named vector for easier lookup
+  # thresholds <- setNames(final_threshold$value, final_threshold$Name)
+  # # Apply thresholding to convert values to binary
+  # binary_df <- medians_per_cluster_filter
+  # binary_df[] <- sapply(names(medians_per_cluster_filter), function(column_name) {
+  #   if (column_name %in% names(thresholds)) {
+  #     as.integer(medians_per_cluster_filter[[column_name]] > thresholds[[column_name]])
+  #   } else {
+  #     medians_per_cluster_filter[[column_name]]
+  #   }
+  # })
+  # 
+  # cat("Generating potential cell type clusters...\n")
+  # potential_ct_cluster <- replace_zero_with_column_names_opt(binary_df)
+  # combined_vector <- apply(potential_ct_cluster, 1, function(x) paste(x[which(x != "0")], collapse = "::"))
+  # 
+  # cat("Identifying clean and mixed clusters...\n")
+  # cluster_clean <- medians_per_cluster$clusters[rowSums(binary_df) == 1]
+  # cluster_mix <- medians_per_cluster$clusters[rowSums(binary_df) != 1]
+  # 
+  # data_cluster_group <- data.frame(clusters = medians_per_cluster$clusters, combined_vector)
+  # data_merge_cluster <- merge(data_cluster_group, Group_threshold_data, "clusters")
+  # data_merge_cluster <- data_merge_cluster[order(data_merge_cluster$ID), ]
+  # 
+  # 
+  # cat("Separating clean and mixed groups...\n")
+  # data_clean_group <- data_merge_cluster[which(data_merge_cluster$clusters %in% cluster_clean), ]
+  # data_mix_group <- data_merge_cluster[which(data_merge_cluster$clusters %in% cluster_mix), ]
+  # 
+  # cat("\nCluster Summary:\n")
+  # print(paste0("Number of clean MicroClusters: ", length(cluster_clean)))
+  # print(paste0("Number of mixed MicroClusters: ", length(cluster_mix)))
+  # cat("- Total MicroClusters:", length(cluster_clean) + length(cluster_mix), "\n\n")
+  # 
+  # colnames(data_mix_group)[-c(1, 2, 3)] <- Signature$cell_type
+  # 
+  # potential_ct <- replace_zero_with_column_names_opt(data_mix_group[, -c(1, 2, 3)])
+  # 
+  # ### Identify clean and mix data
+  # 
+  # cat("Processing cell type combinations...\n")
+  # ## vector of potential cell type
+  # combined_vector <- apply(potential_ct, 1, function(x) paste(x[which(x != "0")], collapse = "::"))
+  # ## adding the vector combination into data
+  # 
+  # cat("Preparing final data matrices...\n")
+  # data_anb_matrix <- data_anb_matrix[, colnames(Signature)[-1]]
+  # data_check <- data.frame(combined_vector, data_anb_matrix[data_mix_group$ID, ], data_mix_group[, -c(1, 2, 3)], ID = data_mix_group$ID)
+  # 
+  # 
+  # colnames(data_check)[2:sum(ncol(data_anb_matrix), 1)] <- colnames(data_anb_matrix)
+  # colnames(data_check)[sum(ncol(data_anb_matrix), 2):sum(ncol(data_anb_matrix), 1, length(Signature[, 1]))] <- Signature[, 1]
+  # 
+  # ## Count the number of instances where a cell's value exceeds the corresponding threshold.
+  # row_sums <- rowSums(data_check[, sum(ncol(data_anb_matrix), 2):sum(ncol(data_anb_matrix), 1, length(Signature[, 1]))])
+  # 
+  # ## Selected clean cell types
+  # data_out <- data_check[row_sums %in% c(1, 0), ]
+  # data_clean <- data.frame(mem = c(data_out$combined_vector), ID = c(data_out$ID))
+  # 
+  # ## Selected clean cell types
+  # data_mixed <- data_check[!(row_sums %in% c(1, 0)), ]
+  # data_mixed <- data_mixed[which(data_mixed$combined_vector %in% names(table(data_mixed$combined_vector))[as.numeric(table(data_mixed$combined_vector)) > 0]), ]
+  # data_mixed <- data_mixed[order(rowSums(data_mixed[sum(ncol(data_anb_matrix), 2):sum(ncol(data_anb_matrix), 1, length(Signature[, 1]))])), ]
+  # 
+  # 
+  # cat("==== Phase 5: Final Processing and KNN Analysis ====\n")
+  # ######## Solving for mixed group
+  # ## KNN
+  # #----
+  # library(parallel)
+  # library(foreach)
+  # library(doParallel)
+  # library(caret)
+  # 
+  # data_out_test <- data_out
+  # data_clean_final <- data_clean
+  # data_clean_cluster <- data.frame(mem = data_clean_group$combined_vector, ID = data_clean_group$ID)
+  # data_clean_final <- rbind(data_clean_final, data_clean_cluster)
+  # 
+  # 
+  # print(paste0("Number of clean cells: ", nrow(data_clean_final), " with ", length(unique(data_clean_final$mem)), " cell types"))
+  # print(paste0("Number of mixed cells: ", nrow(data_mixed), " with ", length(unique(data_mixed$combined_vector)), " mixed cell types"))
+  # 
+  # # Get unique mixed cell types
+  # mix_group <- unique(data_mixed$combined_vector)
+  # 
+  # clean_cell_types <- unique(data_clean_final$mem)
+  # mixed_by_type <- split(data_mixed, data_mixed$combined_vector)
+  # 
+  # # Get signature markers for each clean cell type
+  # signature_markers <- list()
+  # for (ct in clean_cell_types) {
+  #   signature_markers[[ct]] <- names(which(colSums(Signature[Signature[, 1] == ct, ][-1]) > 0))
+  # }
+  # 
+  # num_cores <- min(parallelly::availableCores() - 1, length(mix_group))
+  # registerDoParallel(cores = num_cores)
+  # 
+  # results <- foreach(i = 1:length(mix_group), .combine = rbind, .packages = c("caret")) %dopar% {
+  #   current_mix_type <- mix_group[i]
+  #   
+  #   # Get all cells with this specific mixed type
+  #   data_choose_second <- mixed_by_type[[current_mix_type]]
+  #   
+  #   # Get potential component cell types
+  #   mix_select <- strsplit(current_mix_type, "::")[[1]]
+  #   mix_select <- intersect(mix_select, clean_cell_types)
+  #   
+  #   if (length(mix_select) == 0) {
+  #     return(data.frame(ID = data_choose_second$ID, mem = "Others"))
+  #   }
+  #   
+  #   # Selected markers that signature for component cell type
+  #   anb_select <- names(which(colSums(Signature[Signature[, 1] %in% mix_select, ][-1]) > 0))
+  #   
+  #   if (length(anb_select) == 0) {
+  #     return(data.frame(ID = data_choose_second$ID, mem = "Others"))
+  #   }
+  #   
+  #   # Get the data intensity from the clean cells (all at once for these cell types)
+  #   data_clean_work <- data_out_test[
+  #     which(data_out_test$combined_vector %in% mix_select),
+  #     c(anb_select, "combined_vector", "ID")
+  #   ]
+  #   
+  #   if (nrow(data_clean_work) == 0) {
+  #     return(data.frame(ID = data_choose_second$ID, mem = "Others"))
+  #   } else {
+  #     # Extract relevant data columns for mixed cells
+  #     data_test <- data_choose_second[, c(anb_select, "ID")]
+  #     
+  #     # Add small random noise (vectorized operation)
+  #     train_matrix <- as.matrix(data_clean_work[, anb_select]) +
+  #       matrix(runif(nrow(data_clean_work) * length(anb_select), 0, 0.001),
+  #              nrow = nrow(data_clean_work)
+  #       )
+  #     
+  #     test_matrix <- as.matrix(data_test[, anb_select]) +
+  #       matrix(runif(nrow(data_test) * length(anb_select), 0, 0.001),
+  #              nrow = nrow(data_test)
+  #       )
+  #     
+  #     knn_model <- caret::knn3(train_matrix,
+  #                              as.factor(data_clean_work$combined_vector),
+  #                              k = min(10, nrow(data_clean_work))
+  #     )
+  #     
+  #     # Get predictions for all cells at once
+  #     predictions <- predict(knn_model, test_matrix, type = "prob")
+  #     
+  #     max_indices <- max.col(predictions, ties.method = "first")
+  #     predicted_types <- colnames(predictions)[max_indices]
+  #     
+  #     # Return batch results
+  #     return(data.frame(ID = data_test$ID, mem = predicted_types))
+  #   }
+  # }
+  # 
+  # # Combine results with clean cells
+  # data_clean_final <- rbind(data_clean_final, results)
+  # 
+  # # Final processing
+  # data_clean_final$mem <- ifelse(data_clean_final$mem == "", "Others", data_clean_final$mem)
+  # data_clean_final <- data_clean_final[order(as.numeric(data_clean_final$ID), decreasing = F), ]
+  # 
+  # data_final=data.frame(TACIT=data_clean_final$mem,UMAP1=as.numeric(scfp@reductions[["umap"]]@cell.embeddings[,1]),
+  #                       UMAP2=as.numeric(scfp@reductions[["umap"]]@cell.embeddings[,2]),data_expression)
+  # 
+  # return(data_final)
 }
 
 
