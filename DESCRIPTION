@@ -1,4 +1,4 @@
-Package: TACIT
+Package: TACIT.bkotzen
 Title: TACIT: Threshold based cell type assignment from single cell multiplex imaging data
 Version: 0.0.0.1
 Authors@R: 
