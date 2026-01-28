@@ -314,152 +314,151 @@ threshold_function <- function(k, data_anb, clusters) {
 
 TACIT <- function(data_expression, r, p, Signature) {
   
-  print("IN BEN'S FUNCTION :D")
-  # 
-  # data_anb=data_expression[,colnames(Signature)[-1]]
-  # 
-  # ### Processing data
-  # #----
-  # ## Signature data (St)
-  # Signature[is.na(Signature) == T] <- 0 ## assign all NA as 0
-  # Signature <- as.data.frame(Signature)
-  # 
-  # # Intensity data (A_ij)
-  # 
-  # main_cell_types_with_markers <- find_main_cell_types_with_subsets_and_markers(Signature)
-  # ct_main <- names(main_cell_types_with_markers)
-  # marker_subset <- unique(unlist(main_cell_types_with_markers))
-  # 
-  # 
-  # 
-  # orig_values <- as.matrix(data_anb)
-  # rownames(orig_values) <- 1:nrow(data_anb)
-  # orig_values <- t(orig_values)
-  # orig_values_metadata <- data.frame("CellID" = 1:nrow(data_anb))
-  # row.names(orig_values_metadata) <- orig_values_metadata$CellID
-  # scfp <- CreateSeuratObject(counts = orig_values, meta.data = orig_values_metadata)
-  # 
-  # 
-  # ### Create Seurat object
-  # #----
-  # print("-------------------REACHED HERE: NormalizeData---------------")
-  # # Set up parallel processing
-  # plan(sequential)
-  # scfp <- NormalizeData(scfp, normalization.method = "CLR", margin = 2) # do not normalize data
-  # print("-------------------REACHED HERE: FindVariableFeatures---------------")
-  # scfp <- FindVariableFeatures(scfp, selection.method = "disp", nfeatures = 500)
-  # print("-------------------REACHED HERE: ScaleData---------------")
-  # plan(multisession, workers = parallelly::availableCores() - 1)
-  # scfp <- ScaleData(scfp, features = rownames(scfp))
-  # 
-  # 
-  # 
-  # 
-  # 
-  # #### Clustering
-  # #----
-  # print("-------------------REACHED HERE: RunPCA---------------")
-  # scfp <- RunPCA(scfp, features = VariableFeatures(object = scfp))
-  # print("-------------------REACHED HERE: RunUMAP---------------")
-  # 
-  # 
-  # ####Clustering
-  # #----
-  # scfp <- RunPCA(scfp, features = VariableFeatures(object = scfp))
-  # print("-------------------REACHED HERE: RunUMAP---------------")
-  # total_cells <- ncol(scfp)
-  # #### Clustering
-  # #----
-  # if (total_cells < 100000) {
-  #   print("Less than 100000 cells, running UMAP on the entire dataset")
-  #   scfp <- RunUMAP(scfp,
-  #                   features = VariableFeatures(object = scfp), n.components = p, metric = "correlation", umap.method = "uwot",
-  #                   n.neighbors = 15, learning.rate = 1, spread = 1, min.dist = 0.01, set.op.mix.ratio = 1, local.connectivity = 1
-  #   )
-  # } else {
-  #   print("More than 100000 cells, training UMAP using 30% of cells for training or max 100000 cells, whichever is smaller")
-  #   # Use 30% of cells for training or max 100000 cells, whichever is smaller
-  #   subset_size <- min(100000, ceiling(total_cells * 0.3))
-  #   # For very small datasets, use all cells
-  #   subset_size <- min(subset_size, total_cells)
-  #   
-  #   scfp <- FastRunUMAP(
-  #     seurat_obj = scfp,
-  #     subset_size = subset_size,
-  #     n.components = p,
-  #     n.neighbors = 15,
-  #     metric = "correlation",
-  #     min.dist = 0.01, # Same as original
-  #     random_seed = 1, # For reproducibility
-  #     verbose = TRUE
-  #   )
-  # }
-  # 
-  # print("-------------------REACHED HERE: FindNeighbors---------------")
-  # scfp <- FindNeighbors(scfp, dims = 1:p, reduction = "umap")
-  # 
-  # 
-  # 
-  # 
-  # # Run clusters
-  # print("-------------------REACHED HERE: FindClusters---------------")
-  # scfp <- FindClusters(scfp, resolution = r, random.seed = 1, algorithm = 4, n.iter = 2)
-  # print("---------------- now here ---------------")
-  # # Collected clusters ID for each cells
-  # clusters <- as.numeric(scfp@meta.data[["seurat_clusters"]])
-  # 
-  # print(paste0("Number of clusters: ", length(unique(clusters)), " with ", round(mean(as.numeric(table(clusters))), 0), " cells per clusters"))
-  # 
-  # ### Cell type score
-  # #----
-  # data_anb_matrix <- as.matrix((data_anb)) # scale data intensity and convert to matrix from data frame
-  # Signature_matrix <- as.matrix(Signature[, -1]) # convert signature to matrix from data frame
-  # ct <- data_anb_matrix %*% t(Signature_matrix)
-  # colnames(ct) <- Signature[, 1]
-  # 
-  # 
-  # #  data_anb=scale(data_anb)
-  # 
-  # ### Threshold for cell type
-  # #----
-  # library(parallel)
-  # library(foreach)
-  # library(doParallel)
-  # library(caret)
-  # 
-  # ct <- as.data.frame(ct)
-  # 
-  # num_cores <- parallelly::availableCores() - 1 # Leave one core free for system processes
-  # registerDoParallel(cores = num_cores)
-  # 
-  # # Parallelize first loop
-  # Group_threshold_data <- NULL
-  # final_threshold <- NULL
-  # 
-  # cat("==== Phase 1: Processing Main Data Columns ====\n")
-  # cat("Processing", ncol(ct), "columns in parallel...\n")
-  # final_threshold <- foreach(
-  #   k = 1:ncol(ct), .combine = c,
-  #   .packages = c("stats", "segmented", "dplyr"), .export = c("threshold_function", "threshold_groups")
-  # ) %dopar% {
-  #   # Return the second element of the threshold_function result
-  #   vector <- threshold_function(k, ct, clusters)
-  #   return(vector[[2]])
-  # }
-  # 
-  # # Process Group_threshold_data in parallel
-  # Group_threshold_data <- foreach(
-  #   k = 1:ncol(ct), .combine = cbind,
-  #   .packages = c("stats", "segmented", "dplyr"), .export = c("threshold_function", "threshold_groups")
-  # ) %dopar% {
-  #   # Return the first element of the threshold_function result
-  #   vector <- threshold_function(k, ct, clusters)
-  #   return(vector[[1]])
-  # }
-  # 
-  # 
-  # colnames(Group_threshold_data) <- colnames(ct)
-  # final_threshold <- data.frame(value = final_threshold, Name = colnames(ct)) ########### . Output 1
+
+  data_anb=data_expression[,colnames(Signature)]
+
+  ### Processing data
+  #----
+  ## Signature data (St)
+  Signature[is.na(Signature) == T] <- 0 ## assign all NA as 0
+  Signature <- as.data.frame(Signature)
+
+  # Intensity data (A_ij)
+
+  main_cell_types_with_markers <- find_main_cell_types_with_subsets_and_markers(Signature)
+  ct_main <- names(main_cell_types_with_markers)
+  marker_subset <- unique(unlist(main_cell_types_with_markers))
+
+
+
+  orig_values <- as.matrix(data_anb)
+  rownames(orig_values) <- 1:nrow(data_anb)
+  orig_values <- t(orig_values)
+  orig_values_metadata <- data.frame("CellID" = 1:nrow(data_anb))
+  row.names(orig_values_metadata) <- orig_values_metadata$CellID
+  scfp <- CreateSeuratObject(counts = orig_values, meta.data = orig_values_metadata)
+
+
+  ### Create Seurat object
+  #----
+  print("-------------------REACHED HERE: NormalizeData---------------")
+  # Set up parallel processing
+  plan(sequential)
+  scfp <- NormalizeData(scfp, normalization.method = "CLR", margin = 2) # do not normalize data
+  print("-------------------REACHED HERE: FindVariableFeatures---------------")
+  scfp <- FindVariableFeatures(scfp, selection.method = "disp", nfeatures = 500)
+  print("-------------------REACHED HERE: ScaleData---------------")
+  plan(multisession, workers = parallelly::availableCores() - 1)
+  scfp <- ScaleData(scfp, features = rownames(scfp))
+
+
+
+
+
+  #### Clustering
+  #----
+  print("-------------------REACHED HERE: RunPCA---------------")
+  scfp <- RunPCA(scfp, features = VariableFeatures(object = scfp))
+  print("-------------------REACHED HERE: RunUMAP---------------")
+
+
+  ####Clustering
+  #----
+  scfp <- RunPCA(scfp, features = VariableFeatures(object = scfp))
+  print("-------------------REACHED HERE: RunUMAP---------------")
+  total_cells <- ncol(scfp)
+  #### Clustering
+  #----
+  if (total_cells < 100000) {
+    print("Less than 100000 cells, running UMAP on the entire dataset")
+    scfp <- RunUMAP(scfp,
+                    features = VariableFeatures(object = scfp), n.components = p, metric = "correlation", umap.method = "uwot",
+                    n.neighbors = 15, learning.rate = 1, spread = 1, min.dist = 0.01, set.op.mix.ratio = 1, local.connectivity = 1
+    )
+  } else {
+    print("More than 100000 cells, training UMAP using 30% of cells for training or max 100000 cells, whichever is smaller")
+    # Use 30% of cells for training or max 100000 cells, whichever is smaller
+    subset_size <- min(100000, ceiling(total_cells * 0.3))
+    # For very small datasets, use all cells
+    subset_size <- min(subset_size, total_cells)
+
+    scfp <- FastRunUMAP(
+      seurat_obj = scfp,
+      subset_size = subset_size,
+      n.components = p,
+      n.neighbors = 15,
+      metric = "correlation",
+      min.dist = 0.01, # Same as original
+      random_seed = 1, # For reproducibility
+      verbose = TRUE
+    )
+  }
+
+  print("-------------------REACHED HERE: FindNeighbors---------------")
+  scfp <- FindNeighbors(scfp, dims = 1:p, reduction = "umap")
+
+
+
+
+  # Run clusters
+  print("-------------------REACHED HERE: FindClusters---------------")
+  scfp <- FindClusters(scfp, resolution = r, random.seed = 1, algorithm = 4, n.iter = 2)
+  print("---------------- now here ---------------")
+  # Collected clusters ID for each cells
+  clusters <- as.numeric(scfp@meta.data[["seurat_clusters"]])
+
+  print(paste0("Number of clusters: ", length(unique(clusters)), " with ", round(mean(as.numeric(table(clusters))), 0), " cells per clusters"))
+
+  ### Cell type score
+  #----
+  data_anb_matrix <- as.matrix((data_anb)) # scale data intensity and convert to matrix from data frame
+  Signature_matrix <- as.matrix(Signature) # convert signature to matrix from data frame
+  ct <- data_anb_matrix %*% t(Signature_matrix)
+  colnames(ct) <- Signature
+
+
+  #  data_anb=scale(data_anb)
+
+  ### Threshold for cell type
+  #----
+  library(parallel)
+  library(foreach)
+  library(doParallel)
+  library(caret)
+
+  ct <- as.data.frame(ct)
+
+  num_cores <- parallelly::availableCores() - 1 # Leave one core free for system processes
+  registerDoParallel(cores = num_cores)
+
+  # Parallelize first loop
+  Group_threshold_data <- NULL
+  final_threshold <- NULL
+
+  cat("==== Phase 1: Processing Main Data Columns ====\n")
+  cat("Processing", ncol(ct), "columns in parallel...\n")
+  final_threshold <- foreach(
+    k = 1:ncol(ct), .combine = c,
+    .packages = c("stats", "segmented", "dplyr"), .export = c("threshold_function", "threshold_groups")
+  ) %dopar% {
+    # Return the second element of the threshold_function result
+    vector <- threshold_function(k, ct, clusters)
+    return(vector[[2]])
+  }
+
+  # Process Group_threshold_data in parallel
+  Group_threshold_data <- foreach(
+    k = 1:ncol(ct), .combine = cbind,
+    .packages = c("stats", "segmented", "dplyr"), .export = c("threshold_function", "threshold_groups")
+  ) %dopar% {
+    # Return the first element of the threshold_function result
+    vector <- threshold_function(k, ct, clusters)
+    return(vector[[1]])
+  }
+
+
+  colnames(Group_threshold_data) <- colnames(ct)
+  final_threshold <- data.frame(value = final_threshold, Name = colnames(ct)) ########### . Output 1
   # 
   # # Conditionally handle marker subset processing
   # if (length(marker_subset) > 1) {
