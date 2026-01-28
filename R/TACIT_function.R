@@ -437,6 +437,7 @@ TACIT <- function(data_expression, r, p, Signature) {
 
   cat("==== Phase 1: Processing Main Data Columns ====\n")
   cat("Processing", ncol(ct), "columns in parallel...\n")
+  print('Entering first loop...')
   final_threshold <- foreach(
     k = 1:ncol(ct), .combine = c,
     .packages = c("stats", "segmented", "dplyr"), .export = c("threshold_function", "threshold_groups")
@@ -446,6 +447,7 @@ TACIT <- function(data_expression, r, p, Signature) {
     return(vector[[2]])
   }
 
+  print('entering second loop...')
   # Process Group_threshold_data in parallel
   Group_threshold_data <- foreach(
     k = 1:ncol(ct), .combine = cbind,
@@ -708,6 +710,13 @@ TACIT <- function(data_expression, r, p, Signature) {
   #                       UMAP2=as.numeric(scfp@reductions[["umap"]]@cell.embeddings[,2]),data_expression)
   # 
   # return(data_final)
+  data_final=data.frame(UMAP1=as.numeric(scfp@reductions[["umap"]]@cell.embeddings[,1]),
+                        UMAP2=as.numeric(scfp@reductions[["umap"]]@cell.embeddings[,2]),
+                        data_expression)
+  return(list(
+    df = data_final, 
+    threshold = final_threshold)
+  )
 }
 
 
