@@ -1,11 +1,15 @@
-Package: TACITbkotzen
+Package: TACIT.bkotzen
 Title: TACIT: Threshold based cell type assignment from single cell multiplex imaging data
 Version: 0.0.0.1
 Authors@R: 
     person(given = "Khoa",
            family = "Huynh",
            role = c("aut", "cre"),
-           email = "huynhk4@vcu.edu")
+           email = "huynhk4@vcu.edu"),
+    person(given = "Benjamin",
+           family = "Kotzen",
+           role = "ctb",
+           email = "blkotzen@g.ucla.edu")
 Description: Automate algorithm cell type identification using both CELLxPROTEIN and PROTEINxCELLTYPE information for spatial omics data.
 License: Apache License (>= 2)
 Encoding: UTF-8

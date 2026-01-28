@@ -314,7 +314,7 @@ threshold_function <- function(k, data_anb, clusters) {
 
 TACIT <- function(data_expression, r, p, Signature) {
   
-  # print("IN BEN'S FUNCTION :D")
+  print("IN BEN'S FUNCTION :D")
   # 
   # data_anb=data_expression[,colnames(Signature)[-1]]
   # 
