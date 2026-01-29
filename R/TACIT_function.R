@@ -10,7 +10,7 @@ library(future.apply)
 library(parallelly)
 
 # Plotting functions
-plot_CTR_scatter <- function(feature_name, feature_threshold_df, threshold_val, ds=3) {
+plot_CTR_scatter <- function(feature_name, feature_threshold_df, threshold_val, suffix, ds=3) {
   # print(str(feature_threshold_df))
   # print(colnames(feature_threshold_df))
   # Reduce feature_threshold_df from cell -> cluster level resolution
@@ -96,7 +96,7 @@ plot_CTR_scatter <- function(feature_name, feature_threshold_df, threshold_val, 
     )
   
   # Save plot
-  fig_path <- "figs/QC/CTR/"
+  fig_path <- paste0("figs/QC/", suffix, "CTR/")
   # Create directory if it doesn't exist
   if (!dir.exists(fig_path)) {
     dir.create(fig_path, recursive = TRUE)
@@ -107,7 +107,7 @@ plot_CTR_scatter <- function(feature_name, feature_threshold_df, threshold_val, 
          width = 9, height = 6, units = c("in"), dpi = 300)
 }
 
-boxplot_relevance_groups <- function(feature_name, feature_threshold_df, threshold_val){
+boxplot_relevance_groups <- function(feature_name, feature_threshold_df, threshold_val, suffix){
   p <- ggplot(
     feature_threshold_df %>%
       dplyr::filter(Group_expression %in% c(0, 4)),
@@ -153,7 +153,7 @@ boxplot_relevance_groups <- function(feature_name, feature_threshold_df, thresho
       title = paste0(feature_name, " distribution for Group_expression 0 vs 4")
     )
   
-  fig_path <- "figs/QC/CTR/"
+  fig_path <- paste0("figs/QC/", suffix, "CTR/")
   # Create directory if it doesn't exist
   if (!dir.exists(fig_path)) {
     dir.create(fig_path, recursive = TRUE)
@@ -328,7 +328,7 @@ threshold_groups <- function(input_vector, thresholds) {
 
 
 
-threshold_function <- function(k, data_anb, clusters) {
+threshold_function <- function(k, data_anb, clusters, suffix) {
   ## Save the name of antibodies
   name <- colnames(data_anb[k])
   
@@ -486,8 +486,8 @@ threshold_function <- function(k, data_anb, clusters) {
       rowrank = max(rowrank[median_value == max(median_value)]),
       .groups = "drop"
     )
-  boxplot_relevance_groups(name, feature_threshold_df, threshold_point_final)
-  plot_CTR_scatter(name, feature_threshold_df, threshold_point_final)
+  boxplot_relevance_groups(name, feature_threshold_df, threshold_point_final, suffix)
+  plot_CTR_scatter(name, feature_threshold_df, threshold_point_final, suffix)
   
   
   return(list(Group_Threshold_new, threshold_point_final))
@@ -496,7 +496,7 @@ threshold_function <- function(k, data_anb, clusters) {
   #             new_data_anb = new_data_anb))
 }
 
-TACIT <- function(data_expression, r, p, Signature) {
+TACIT <- function(data_expression, r, p, Signature, suffix) {
   
 
   data_anb=data_expression[,colnames(Signature)]
@@ -635,7 +635,7 @@ TACIT <- function(data_expression, r, p, Signature) {
     .packages = c("stats", "segmented", "dplyr"),
     .export = c("threshold_function", "threshold_groups")
   ) %dopar% {
-    threshold_function(k, ct, clusters)
+    threshold_function(k, ct, clusters, suffix)
   }
 # 
 #   print('entering second loop...')
